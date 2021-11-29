@@ -36,7 +36,7 @@ const connectSsh = async (): Promise<void> => {
   });
 
   sshConnected = true;
-}
+};
 
 const sourceFolderPath = 'received_sources';
 
@@ -44,17 +44,30 @@ if (!fs.existsSync(`${sourceFolderPath}/`)) {
   fs.mkdirSync(sourceFolderPath);
 }
 
-interface RunResult {
-  code: number,
-  stdout: string,
-  stderr: string,
+interface CodeCompileAndRunRequest {
+  code: string;
+  testData?: string[];
 }
 
-const compile = async (code: string): Promise<RunResult> => {
+interface ExecutionOutput {
+  code: number;
+  stdout: string;
+  stderr: string;
+}
+
+interface ExecutionResult extends ExecutionOutput {
+  args?: string;
+}
+
+const compile = async ({
+  code,
+  testData,
+}: CodeCompileAndRunRequest): Promise<ExecutionResult[]> => {
   if (!sshConnected) {
     await connectSsh();
   }
 
+  // Create path variables and temporary source code file to upload
   const runName = new Date().getTime();
   const pathLocalSource = `${sourceFolderPath}/${runName}.c`;
 
@@ -64,39 +77,61 @@ const compile = async (code: string): Promise<RunResult> => {
   const pathRemoteSource = `${pathRemote}${runName}.c`;
   const pathRemoteExecutable = `${pathRemote}${runName}`;
 
+  let compileResult: ExecutionResult;
+  const runResults: ExecutionResult[] = [];
+
   try {
+    // Create target folder and copy source code file
     await ssh.mkdir(pathRemote);
     await ssh.putFile(pathLocalSource, pathRemoteSource);
-    await ssh.execCommand(`gcc ${pathRemoteSource} -o ${pathRemoteExecutable}`);
-    const result = await ssh.execCommand(pathRemoteExecutable);
+
+    // Compile source code
+    compileResult = (await ssh.execCommand(
+      `gcc ${pathRemoteSource} -o ${pathRemoteExecutable}`
+    )) as ExecutionOutput;
+    const compileSuccess = compileResult.code === 0;
+
+    
+    if (!compileSuccess) {
+      // If the compile failed, return its output instead
+      return [compileResult];
+    }
+
+    if (Array.isArray(testData)) {
+      // If there's test data, run the program with each data element as the run arguments
+      for (const data of testData) {
+        const execOutput = (await ssh.execCommand(
+          `${pathRemoteExecutable} ${data}`
+        )) as ExecutionOutput;
+        // Save the output and append our test data as args
+        runResults.push({ ...execOutput, args: data });
+      }
+    } else {
+      // When there's no test data, just run a single time without arguments and return the execution output
+      runResults.push(
+        (await ssh.execCommand(pathRemoteExecutable)) as ExecutionOutput
+      );
+    }
+
+    return runResults;
+  } catch (e) {
+    throw e;
+  } finally {
     await ssh.execCommand(`rm -rd ${pathRemote}`);
     fs.rmSync(pathLocalSource);
-
-    return result;
-  } catch (e) {
-    fs.rmSync(pathLocalSource);
-    throw e;
   }
 };
 
-/* const helloWorld = `\
-#include <stdio.h>
-
-int main() {
-  printf("Hello World!");
-  return 0;
-}\
-`;
-
-(async function() {
-  console.log(await compile(helloWorld));
-})() */
-
-app.post('/compile', async (req, res) => {
+app.post('/compile-and-run', async (req, res) => {
   try {
-    console.log(req.body);
-    const result = await compile(req.body.code);
-    res.status(200).send(result);
+    const request = req.body as CodeCompileAndRunRequest;
+    const results = await compile(request);
+
+    if (results.every((result) => result.code === 0)) {
+      res.status(200).send(results);
+    } else {
+      res.status(400).send(results);
+    }
   } catch (e) {
     res.status(500).send(e);
   }
