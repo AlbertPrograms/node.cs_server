@@ -46,6 +46,7 @@ if (!fs.existsSync(`${sourceFolderPath}/`)) {
 
 interface CodeCompileAndRunRequest {
   code: string;
+  expectedResults: string[];
   testData?: string[];
 }
 
@@ -56,11 +57,13 @@ interface ExecutionOutput {
 }
 
 interface ExecutionResult extends ExecutionOutput {
+  outputMatchesExpectation?: boolean;
   args?: string;
 }
 
 const compile = async ({
   code,
+  expectedResults,
   testData,
 }: CodeCompileAndRunRequest): Promise<ExecutionResult[]> => {
   if (!sshConnected) {
@@ -99,13 +102,14 @@ const compile = async ({
 
     if (Array.isArray(testData)) {
       // If there's test data, run the program with each data element as the run arguments
-      for (const data of testData) {
+      // for (const data of testData) {
+      testData.forEach(async (data, index) => {
         const execOutput = (await ssh.execCommand(
           `${pathRemoteExecutable} ${data}`
         )) as ExecutionOutput;
-        // Save the output and append our test data as args
-        runResults.push({ ...execOutput, args: data });
-      }
+        // Save the output, appending whether the output matches the expectation and our test data as args
+        runResults.push({ ...execOutput, outputMatchesExpectation: execOutput.stdout === expectedResults[index], args: data});
+      });
     } else {
       // When there's no test data, just run a single time without arguments and return the execution output
       runResults.push(
