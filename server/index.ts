@@ -12,30 +12,23 @@ app.listen(port, () => console.log(`Listening on port ${port}`));
 
 const user = process.env.sshUsername;
 const pathCompile = `/home/${user}/compile/`;
-
-// https://www.marksei.com/lxc-getting-started-linux-containers/
-// https://linuxcontainers.org/lxc/getting-started/ LXC create
-// https://serverok.in/lxc-error-unable-to-fetch-gpg-key-from-keyserver fix LXC create
-// https://bobcares.com/blog/ssh-to-lxc-containers/ SSH into LXC
-// https://ubuntuforums.org/showthread.php?t=1384034 install openssh server on LXC
-// https://phoenixnap.com/kb/how-to-list-users-linux https://tekneed.com/create-users-in-linux-password-manage-user-expiration/ https://linuxhint.com/give-user-folder-permission-linux/ create lxcuser
-// https://upcloud.com/community/tutorials/use-ssh-keys-authentication/ https://aapjeisbaas.nl/post/push-ssh-public-key-to-lxc-container/ generate and use key
-// https://askubuntu.com/questions/307881/ssh-public-key-authentication-doesnt-work setup sshd_config properly
-// mkdir compile chown albert:albert chmod 700
-// https://www.cyberciti.biz/faq/howto-compile-and-run-c-cplusplus-code-in-linux/ install gcc
-// https://superuser.com/questions/433988/how-to-find-the-ip-address-of-a-vm-running-on-vmware-or-other-methods-of-using/531635 find VMware IP
-
 const ssh = new NodeSSH();
 let sshConnected = false;
+let sshConnecting = false;
 
 const connectSsh = async (): Promise<void> => {
-  await ssh.connect({
-    host: process.env.sshAddress,
-    username: user,
-    privateKey: process.env.sshPrivateKeyLocation,
-  });
+  if (!sshConnected && !sshConnecting) {
+    sshConnecting = true;
+
+    await ssh.connect({
+      host: process.env.sshAddress,
+      username: user,
+      privateKey: process.env.sshPrivateKeyLocation,
+    });
+  }
 
   sshConnected = true;
+  sshConnecting = false;
 };
 
 const sourceFolderPath = 'received_sources';
@@ -94,7 +87,6 @@ const compile = async ({
     )) as ExecutionOutput;
     const compileSuccess = compileResult.code === 0;
 
-    
     if (!compileSuccess) {
       // If the compile failed, return its output instead
       return [compileResult];
@@ -107,14 +99,25 @@ const compile = async ({
         const execOutput = (await ssh.execCommand(
           `${pathRemoteExecutable} ${data}`
         )) as ExecutionOutput;
+
         // Save the output, appending whether the output matches the expectation and our test data as args
-        runResults.push({ ...execOutput, outputMatchesExpectation: execOutput.stdout === expectedResults[index], args: data});
+        runResults.push({
+          ...execOutput,
+          outputMatchesExpectation:
+            execOutput.stdout === expectedResults[index],
+          args: data,
+        });
       });
     } else {
-      // When there's no test data, just run a single time without arguments and return the execution output
-      runResults.push(
-        (await ssh.execCommand(pathRemoteExecutable)) as ExecutionOutput
-      );
+      const execOutput = (await ssh.execCommand(
+        pathRemoteExecutable
+      )) as ExecutionOutput;
+
+      // When there's no test data, save the output appending whether the output matches the expectation
+      runResults.push({
+        ...execOutput,
+        outputMatchesExpectation: execOutput.stdout === expectedResults[0],
+      });
     }
 
     return runResults;
