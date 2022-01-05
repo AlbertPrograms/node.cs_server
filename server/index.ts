@@ -39,7 +39,7 @@ if (!fs.existsSync(`${sourceFolderPath}/`)) {
 
 interface CodeCompileAndRunRequest {
   code: string;
-  expectedResults: string[];
+  expectedOutput: string[];
   testData?: string[];
 }
 
@@ -56,7 +56,7 @@ interface ExecutionResult extends ExecutionOutput {
 
 const compile = async ({
   code,
-  expectedResults,
+  expectedOutput,
   testData,
 }: CodeCompileAndRunRequest): Promise<ExecutionResult[]> => {
   if (!sshConnected) {
@@ -104,7 +104,7 @@ const compile = async ({
         runResults.push({
           ...execOutput,
           outputMatchesExpectation:
-            execOutput.stdout === expectedResults[index],
+            execOutput.stdout === expectedOutput[index],
           args: data,
         });
       });
@@ -116,7 +116,7 @@ const compile = async ({
       // When there's no test data, save the output appending whether the output matches the expectation
       runResults.push({
         ...execOutput,
-        outputMatchesExpectation: execOutput.stdout === expectedResults[0],
+        outputMatchesExpectation: execOutput.stdout === expectedOutput[0],
       });
     }
 
