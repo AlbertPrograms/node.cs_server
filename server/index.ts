@@ -39,8 +39,10 @@ if (!fs.existsSync(`${sourceFolderPath}/`)) {
 
 interface CodeCompileAndRunRequest {
   code: string;
-  expectedOutput: string[];
   testData?: string[];
+  expectedOutput: string[];
+  hiddenTestData?: string[];
+  hiddenExpectedOutput: string[];
 }
 
 interface ExecutionOutput {
@@ -54,11 +56,13 @@ interface ExecutionResult extends ExecutionOutput {
   args?: string;
 }
 
-const compile = async ({
+const compileAndRun = async ({
   code,
-  expectedOutput,
   testData,
-}: CodeCompileAndRunRequest): Promise<ExecutionResult[]> => {
+  expectedOutput,
+  hiddenTestData,
+  hiddenExpectedOutput,
+}: CodeCompileAndRunRequest): Promise<[ExecutionResult[], ExecutionResult[]]> => {
   if (!sshConnected) {
     await connectSsh();
   }
@@ -74,7 +78,7 @@ const compile = async ({
   const pathRemoteExecutable = `${pathRemote}${runName}`;
 
   let compileResult: ExecutionResult;
-  const runResults: ExecutionResult[] = [];
+  const [runResults, hiddenRunResults]: [ExecutionResult[], ExecutionResult[]] = [[], []];
 
   try {
     // Create target folder and copy source code file
@@ -89,7 +93,7 @@ const compile = async ({
 
     if (!compileSuccess) {
       // If the compile failed, return its output instead
-      return [compileResult];
+      return [[compileResult], null];
     }
 
     if (Array.isArray(testData)) {
@@ -103,8 +107,7 @@ const compile = async ({
         // Save the output, appending whether the output matches the expectation and our test data as args
         runResults.push({
           ...execOutput,
-          outputMatchesExpectation:
-            execOutput.stdout === expectedOutput[index],
+          outputMatchesExpectation: execOutput.stdout === expectedOutput[index],
           args: data,
         });
       });
@@ -120,7 +123,30 @@ const compile = async ({
       });
     }
 
-    return runResults;
+    if (Array.isArray(hiddenTestData)) {
+      hiddenTestData.forEach(async (data, index) => {
+        const execOutput = (await ssh.execCommand(
+          `${pathRemoteExecutable} ${data}`
+        )) as ExecutionOutput;
+
+        hiddenRunResults.push({
+          ...execOutput,
+          outputMatchesExpectation: execOutput.stdout === hiddenExpectedOutput[index],
+          args: data,
+        });
+      });
+    } else {
+      const execOutput = (await ssh.execCommand(
+        pathRemoteExecutable
+      )) as ExecutionOutput;
+
+      hiddenRunResults.push({
+        ...execOutput,
+        outputMatchesExpectation: execOutput.stdout === hiddenExpectedOutput[0],
+      });
+    }
+
+    return [runResults, hiddenRunResults];
   } catch (e) {
     throw e;
   } finally {
@@ -132,12 +158,12 @@ const compile = async ({
 app.post('/compile-and-run', async (req, res) => {
   try {
     const request = req.body as CodeCompileAndRunRequest;
-    const results = await compile(request);
+    const [results, hiddenResults] = await compileAndRun(request);
 
-    if (results.every((result) => result.code === 0)) {
-      res.status(200).send(results);
+    if (results.every((result) => result.code === 0) && hiddenResults.every((result) => result.code === 0)) {
+      res.status(200).send({results, hiddenResults});
     } else {
-      res.status(400).send(results);
+      res.status(400).send({results, hiddenResults});
     }
   } catch (e) {
     res.status(500).send(e);
